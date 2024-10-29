@@ -1469,7 +1469,7 @@ fn make_colorspace<'a>(doc: &'a Document, name: &[u8], resources: &'a Dictionary
                     _ => ColorSpace::DeviceRGB
                 }
             } else {
-                // panic!();
+                ColorSpace::DeviceRGB
             }
         }
     }
