@@ -471,7 +471,7 @@ impl<'a> PdfSimpleFont<'a> {
                                             match unicode_map.entry(code as u32) {
                                                 Entry::Vacant(v) => { v.insert("".to_owned()); }
                                                 Entry::Occupied(e) => {
-                                                    panic!("unexpected entry in unicode map")
+                                                    // panic!("unexpected entry in unicode map")
                                                 }
                                             }
                                         }
