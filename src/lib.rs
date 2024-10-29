@@ -1709,13 +1709,17 @@ impl<'a> Processor<'a> {
                 "m" => { path.ops.push(PathOp::MoveTo(as_num(&operation.operands[0]), as_num(&operation.operands[1]))) }
                 "l" => { path.ops.push(PathOp::LineTo(as_num(&operation.operands[0]), as_num(&operation.operands[1]))) }
                 "c" => {
-                    path.ops.push(PathOp::CurveTo(
-                        as_num(&operation.operands[0]),
-                        as_num(&operation.operands[1]),
-                        as_num(&operation.operands[2]),
-                        as_num(&operation.operands[3]),
-                        as_num(&operation.operands[4]),
-                        as_num(&operation.operands[5])))
+                    if operation.operands.len() == 6 {
+                        path.ops.push(PathOp::CurveTo(
+                                as_num(&operation.operands[0]),
+                                as_num(&operation.operands[1]),
+                                as_num(&operation.operands[2]),
+                                as_num(&operation.operands[3]),
+                                as_num(&operation.operands[4]),
+                                as_num(&operation.operands[5])))
+                    } else {
+                        dlog!("unexpected curve operation {:?}", operation);
+                    }
                 }
                 "v" => {
                     let (x, y) = path.current_point();
