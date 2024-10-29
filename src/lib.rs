@@ -1458,17 +1458,18 @@ fn make_colorspace<'a>(doc: &'a Document, name: &[u8], resources: &'a Dictionary
                     "DeviceRGB" => ColorSpace::DeviceRGB,
                     "DeviceCMYK" => ColorSpace::DeviceCMYK,
                     _ => {
-                        panic!("color_space {:?} {:?} {:?}", name, cs_name, cs)
+                        // panic!("color_space {:?} {:?} {:?}", name, cs_name, cs)
+                        ColorSpace::DeviceRGB
                     }
                 }
             } else if let Ok(cs) = cs.as_name() {
                 match pdf_to_utf8(cs).as_ref() {
-                    "DeviceRGB" => ColorSpace::DeviceRGB,
                     "DeviceGray" => ColorSpace::DeviceGray,
-                    _ => panic!()
+                    "DeviceRGB" => ColorSpace::DeviceRGB,
+                    _ => ColorSpace::DeviceRGB
                 }
             } else {
-                panic!();
+                // panic!();
             }
         }
     }
