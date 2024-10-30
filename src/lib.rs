@@ -88,32 +88,29 @@ fn get_info(doc: &Document) -> Option<&Dictionary> {
     None
 }
 
-fn get_catalog(doc: &Document) -> &Dictionary {
-    match doc.trailer.get(b"Root").unwrap() {
+fn get_catalog(doc: &Document) -> Option<&Dictionary> {
+    match doc.trailer.get(b"Root").ok()? {
         &Object::Reference(ref id) => {
             match doc.get_object(*id) {
-                Ok(&Object::Dictionary(ref catalog)) => { return catalog; }
-                _ => {}
+                Ok(&Object::Dictionary(ref catalog)) => Some(catalog),
+                _ => None
             }
         }
-        _ => {}
+        _ => None
     }
-    panic!();
 }
 
-fn get_pages(doc: &Document) -> &Dictionary {
-    let catalog = get_catalog(doc);
-    match catalog.get(b"Pages").unwrap() {
+fn get_pages(doc: &Document) -> Option<&Dictionary> {
+    let catalog = get_catalog(doc)?;
+    match catalog.get(b"Pages").ok()? {
         &Object::Reference(ref id) => {
             match doc.get_object(*id) {
-                Ok(&Object::Dictionary(ref pages)) => { return pages; }
-                other => {dlog!("pages: {:?}", other)}
+                Ok(&Object::Dictionary(ref pages)) => Some(pages),
+                _ => None
             }
         }
-        other => { dlog!("pages: {:?}", other)}
+        _ => None
     }
-    dlog!("catalog {:?}", catalog);
-    panic!();
 }
 
 #[allow(non_upper_case_globals)]
@@ -214,25 +211,40 @@ impl<'a, T: FromObj<'a>> FromObj<'a> for Vec<T> {
     }
 }
 
-// XXX: These will panic if we don't have the right number of items
-// we don't want to do that
 impl<'a, T: FromObj<'a>> FromObj<'a> for [T; 4] {
     fn from_obj(doc: &'a Document, obj: &'a Object) -> Option<Self> {
-        maybe_deref(doc, obj).as_array().map(|x| {
+        maybe_deref(doc, obj).as_array().ok().and_then(|x| {
             let mut all = x.iter()
-                .map(|x| T::from_obj(doc, x).expect("wrong type"));
-            [all.next().unwrap(), all.next().unwrap(), all.next().unwrap(), all.next().unwrap()]
-        }).ok()
+                .filter_map(|x| T::from_obj(doc, x));
+            if x.len() < 4 {
+                None
+            } else {
+                Some([
+                    all.next()?,
+                    all.next()?,
+                    all.next()?,
+                    all.next()?
+                ])
+            }
+        })
     }
 }
 
 impl<'a, T: FromObj<'a>> FromObj<'a> for [T; 3] {
     fn from_obj(doc: &'a Document, obj: &'a Object) -> Option<Self> {
-        maybe_deref(doc, obj).as_array().map(|x| {
+        maybe_deref(doc, obj).as_array().ok().and_then(|x| {
             let mut all = x.iter()
-                .map(|x| T::from_obj(doc, x).expect("wrong type"));
-            [all.next().unwrap(), all.next().unwrap(), all.next().unwrap()]
-        }).ok()
+                .filter_map(|x| T::from_obj(doc, x));
+            if x.len() < 3 {
+                None
+            } else {
+                Some([
+                    all.next()?,
+                    all.next()?,
+                    all.next()?
+                ])
+            }
+        })
     }
 }
 
@@ -281,8 +293,12 @@ fn maybe_get<'a, T: FromObj<'a>>(doc: &'a Document, dict: &'a Dictionary, key: &
     maybe_get_obj(doc, dict, key).and_then(|o| T::from_obj(doc, o))
 }
 
-fn get_name_string<'a>(doc: &'a Document, dict: &'a Dictionary, key: &[u8]) -> String {
-    pdf_to_utf8(dict.get(key).map(|o| maybe_deref(doc, o)).unwrap_or_else(|_| panic!("deref")).as_name().expect("name"))
+fn get_name_string<'a>(doc: &'a Document, dict: &'a Dictionary, key: &[u8]) -> Option<String> {
+    dict.get(key)
+        .ok()
+        .map(|o| maybe_deref(doc, o))
+        .and_then(|o| o.as_name().ok())
+        .map(|n| pdf_to_utf8(n))
 }
 
 #[allow(dead_code)]
@@ -321,12 +337,10 @@ struct PdfType3Font<'a> {
 fn make_font<'a>(doc: &'a Document, font: &'a Dictionary) -> Rc<dyn PdfFont + 'a> {
     let subtype = get_name_string(doc, font, b"Subtype");
     dlog!("MakeFont({})", subtype);
-    if subtype == "Type0" {
-        Rc::new(PdfCIDFont::new(doc, font))
-    } else if subtype == "Type3" {
-        Rc::new(PdfType3Font::new(doc, font))
-    } else {
-        Rc::new(PdfSimpleFont::new(doc, font))
+    match subtype.as_deref() {
+        Some("Type0") => Rc::new(PdfCIDFont::new(doc, font)),
+        Some("Type3") => Rc::new(PdfType3Font::new(doc, font)),
+        _ => Rc::new(PdfSimpleFont::new(doc, font))
     }
 }
 
@@ -380,25 +394,29 @@ impl<'a> PdfSimpleFont<'a> {
         let mut type1_encoding = None;
         if let Some(descriptor) = descriptor {
             dlog!("descriptor {:?}", descriptor);
-            if subtype == "Type1" {
-                let file = maybe_get_obj(doc, descriptor, b"FontFile");
-                match file {
-                    Some(&Object::Stream(ref s)) => {
-                        let s = get_contents(s);
-                        //dlog!("font contents {:?}", pdf_to_utf8(&s));
-                        type1_encoding = Some(type1_encoding_parser::get_encoding_map(&s).expect("encoding"));
+            match subtype.as_deref() {
+                Some("Type1") => {
+                    let file = maybe_get_obj(doc, descriptor, b"FontFile");
+                    match file {
+                        Some(&Object::Stream(ref s)) => {
+                            let s = get_contents(s);
+                            //dlog!("font contents {:?}", pdf_to_utf8(&s));
+                            type1_encoding = Some(type1_encoding_parser::get_encoding_map(&s).expect("encoding"));
+                        }
+                        _ => { dlog!("font file {:?}", file) }
                     }
-                    _ => { dlog!("font file {:?}", file) }
                 }
-            } else if subtype == "TrueType" {
-                let file = maybe_get_obj(doc, descriptor, b"FontFile2");
-                match file {
-                    Some(&Object::Stream(ref s)) => {
-                        let _s = get_contents(s);
-                        //File::create(format!("/tmp/{}", base_name)).unwrap().write_all(&s);
+                Some("TrueType") => {
+                    let file = maybe_get_obj(doc, descriptor, b"FontFile2");
+                    match file {
+                        Some(&Object::Stream(ref s)) => {
+                            let _s = get_contents(s);
+                            //File::create(format!("/tmp/{}", base_name)).unwrap().write_all(&s);
+                        }
+                        _ => { dlog!("font file {:?}", file) }
                     }
-                    _ => { dlog!("font file {:?}", file) }
                 }
+                _ => {}
             }
 
             let font_file3 = get::<Option<&Object>>(doc, descriptor, b"FontFile3");
@@ -464,8 +482,9 @@ impl<'a> PdfSimpleFont<'a> {
                                         }
                                     }
                                 } else {
-                                    match unicode_map {
-                                        Some(ref mut unicode_map) if base_name.contains("FontAwesome") => {
+                                    match (&mut unicode_map, &base_name) {
+                                        // Some(ref mut unicode_map) if base_name.contains("FontAwesome") => {
+                                        (Some(ref mut unicode_map), Some(ref base_name)) if base_name.contains("FontAwesome") => {
                                             // the fontawesome tex package will use glyph names that don't have a corresponding unicode
                                             // code point, so we'll use an empty string instead. See issue #76
                                             match unicode_map.entry(code as u32) {
@@ -476,7 +495,7 @@ impl<'a> PdfSimpleFont<'a> {
                                             }
                                         }
                                         _ => {
-                                            println!("unknown glyph name '{}' for font {}", name, base_name);
+                                            println!("unknown glyph name '{}' for font {:?}", name, base_name);
                                         }
                                     }
                                 }
@@ -513,7 +532,7 @@ impl<'a> PdfSimpleFont<'a> {
                         }
                     }
                     encoding_table = Some(table)
-                } else if subtype == "TrueType" {
+                } else if subtype.as_deref() == Some("TrueType") {
                     encoding_table = Some(encodings::WIN_ANSI_ENCODING.iter()
                         .map(|x| if let &Some(x) = x { glyphnames::name_to_unicode(x).unwrap() } else { 0 })
                         .collect());
@@ -541,7 +560,9 @@ impl<'a> PdfSimpleFont<'a> {
                 i += 1;
             }
             assert_eq!(first_char + i - 1, last_char);
-        } else if is_core_font(&base_name) {
+        // } else if let Some(base_name) = base_name && is_core_font(&base_name) {
+        } else if base_name.is_some() && is_core_font(&base_name.as_ref().unwrap()) {
+            let base_name = base_name.as_ref().unwrap();
             for font_metrics in core_fonts::metrics().iter() {
                 if font_metrics.0 == base_name {
                     if let Some(ref encoding) = encoding_table {
@@ -591,7 +612,7 @@ impl<'a> PdfSimpleFont<'a> {
                 }
             }
         } else {
-            panic!("no widths");
+            dlog!("no widths");
         }
 
         let missing_width = get::<Option<f64>>(doc, font, b"MissingWidth").unwrap_or(0.);
@@ -599,15 +620,15 @@ impl<'a> PdfSimpleFont<'a> {
     }
 
     #[allow(dead_code)]
-    fn get_type(&self) -> String {
+    fn get_type(&self) -> Option<String> {
         get_name_string(self.doc, self.font, b"Type")
     }
     #[allow(dead_code)]
-    fn get_basefont(&self) -> String {
+    fn get_basefont(&self) -> Option<String> {
         get_name_string(self.doc, self.font, b"BaseFont")
     }
     #[allow(dead_code)]
-    fn get_subtype(&self) -> String {
+    fn get_subtype(&self) -> Option<String> {
         get_name_string(self.doc, self.font, b"Subtype")
     }
     #[allow(dead_code)]
@@ -2121,9 +2142,15 @@ pub fn print_metadata(doc: &Document) {
             }
         }
     }
-    dlog!("Page count: {}", get::<i64>(&doc, &get_pages(&doc), b"Count"));
-    dlog!("Pages: {:?}", get_pages(&doc));
-    dlog!("Type: {:?}", get_pages(&doc).get(b"Type").and_then(|x| x.as_name()).unwrap());
+    let pages = get_pages(&doc);
+    match pages {
+        Some(ref pages) => {
+            dlog!("Page count: {}", get::<i64>(&doc, &pages, b"Count"));
+            dlog!("Pages: {:?}", pages);
+            dlog!("Type: {:?}", pages.get(b"Type").and_then(|x| x.as_name()).unwrap());
+        }
+        None => { dlog!("No pages found"); }
+    }
 }
 
 /// Extract the text from a pdf at `path` and return a `String` with the results
